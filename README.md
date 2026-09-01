@@ -1,89 +1,198 @@
-# Telegram Photocard Shop Bot
+# Telegram Photocard Shop Bot V3
 
-A starter Telegram shop bot for selling photocards.
+V3 supports two sale modes in the same bot:
 
-## Included
+- **First-Come:** adding a card creates an exclusive 10-minute cart hold.
+- **Priority:** overlapping claims remain open until a set is allocated; buyers claiming
+  more remaining cards are processed before smaller claims.
 
-- `/start` shop home
-- Browse by ATEEZ member
-- Demo photocard catalogue
-- Add to cart
-- Cart subtotal
-- Delivery selection
-- Checkout preview
-- Railway deployment files
-- Bot token kept outside the code
+It also supports photo previews inside the bot and automatic photo listings in a
+Telegram sales channel.
 
-This version intentionally uses demo inventory stored in `bot.py`.
-The next upgrade is Google Sheets integration.
+## 1. Update Google Apps Script
 
-## 1. Test locally
+Open the Photocard Sales Tracker and choose **Extensions → Apps Script**.
 
-Install Python 3.11+.
-
-Create a virtual environment:
-
-### macOS / Linux
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-export TELEGRAM_BOT_TOKEN="YOUR_TOKEN_HERE"
-python bot.py
-```
-
-### Windows PowerShell
-
-```powershell
-python -m venv .venv
-.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-$env:TELEGRAM_BOT_TOKEN="YOUR_TOKEN_HERE"
-python bot.py
-```
-
-Then open your bot in Telegram and send:
+Create or replace these four script files with the matching files from this project:
 
 ```text
-/start
+Code.gs
+SheetHelpers.gs
+Commerce.gs
+Priority.gs
 ```
 
-## 2. Deploy on Railway
-
-1. Put these project files in a GitHub repository.
-2. In Railway, create a new project and choose **Deploy from GitHub repo**.
-3. Select the repository.
-4. In Railway, open the service → **Variables**.
-5. Add:
+In **Project Settings → Script Properties**, keep or add:
 
 ```text
-TELEGRAM_BOT_TOKEN = your BotFather token
+SHOP_API_SECRET = your long private random secret
 ```
 
-6. Railway will install `requirements.txt` and run `python bot.py`.
-7. Open Telegram and send `/start`.
+Select `setupShopApi` and press **Run** once. It adds the integration fields and creates
+the new tabs without deleting existing tracker data.
 
-## Important
+### Inventory fields added
 
-Never upload your real Telegram bot token to GitHub or paste it inside `bot.py`.
+```text
+Set ID
+Sale Mode
+Telegram File ID
+Held By
+Held Until
+Allocated Buyer
+Allocated Telegram User ID
+Winning Claim ID
+```
 
-If the token is ever exposed, use BotFather to revoke it and generate a new one.
+### Order fields added
 
-## Next build stage
+```text
+Telegram User ID
+Order Source
+Set ID
+```
 
-The planned Google Sheets connection will replace the demo `PRODUCTS` list and add:
+### Tabs created
 
-- live inventory
-- card images
-- automatic card IDs
-- reserved / sold status
-- customer details
-- order IDs
-- PayNow instructions
-- payment screenshot upload
-- admin approval
-- mailing status
-- tracking numbers
-- order history
-- sales dashboard integration
+```text
+Sets
+Claims
+Claim Items
+```
+
+After updating the code, choose **Deploy → Manage deployments → Edit → New version →
+Deploy**. Reuse the existing `/exec` URL. Merely saving the script does not update the
+live deployment.
+
+## 2. Configure Railway
+
+Replace the old GitHub project files with this V3 project. Keep the existing variables
+and add:
+
+```text
+ADMIN_TELEGRAM_IDS = your numeric Telegram ID
+SALES_CHANNEL_ID = @yourchannelusername
+```
+
+Multiple admins can be comma-separated:
+
+```text
+ADMIN_TELEGRAM_IDS = 123456789,987654321
+```
+
+Send `/whoami` to the bot to obtain your numeric Telegram ID. Add the bot as an admin in
+the sales channel and allow it to post messages before using `/postcard`.
+
+The full variable list is in `.env.example`.
+
+## 3. First-come cards
+
+For an ordinary card, leave `Set ID` blank and use either a blank `Sale Mode` or:
+
+```text
+First-Come
+```
+
+When a buyer adds it to cart, the API atomically changes:
+
+```text
+Available → Held → Pending Payment
+```
+
+The hold lasts 10 minutes. Another buyer cannot cart the same PC during that period.
+Expired holds are released automatically when the bot next reads the inventory.
+
+## 4. Priority sets
+
+Add a row to `Sets`:
+
+| Set ID | Set Name | Claim Opens | Claim Closes | Sale Mode | Status |
+|---|---|---|---|---|---|
+| SET-001 | Golden Hour San Set | 1 Sep 2026 20:00 | 1 Sep 2026 22:00 | Priority | Claims Open |
+
+For every Inventory card belonging to it, enter:
+
+```text
+Set ID = SET-001
+Sale Mode = Priority
+Status = Available
+```
+
+Buyers may overlap on the same PC. Their claim is stored immediately in `Claims` and
+`Claim Items`.
+
+After the closing time, run this admin command:
+
+```text
+/allocate SET-001
+```
+
+The allocation engine repeatedly:
+
+1. counts each buyer’s remaining available cards in that set;
+2. selects the largest remaining claim;
+3. breaks ties using the earliest final edit time, then Claim ID;
+4. awards all currently available cards in that claim;
+5. recalculates everyone else’s remaining quantity.
+
+All cards awarded to a buyer are treated as binding purchases. Winners receive a bot
+message and choose delivery before the order is created.
+
+If an unpaid priority order is cancelled, the original winner is marked `Forfeited` and
+the released cards are automatically reallocated to the remaining claimants.
+
+## 5. Card photo previews
+
+The image is stored by Telegram; the spreadsheet keeps only a reusable File ID.
+
+1. Send the photo to the bot privately.
+2. Reply directly to that photo with:
+
+```text
+/setphoto SAN-GH2-001
+```
+
+The bot writes the image reference into `Telegram File ID`. The preview then appears
+whenever a customer opens that card.
+
+To publish the full photo listing to the sales channel:
+
+```text
+/postcard SAN-GH2-001
+```
+
+The channel post contains:
+
+- the photocard image;
+- member, album, version, source and price;
+- first-come or priority information;
+- current priority claim count;
+- a **View / Claim** button that opens the exact card in the bot.
+
+## Customer commands
+
+```text
+/start - Open shop
+/browse - Browse photocards
+/cart - View first-come timed holds
+/claims - View priority claims and results
+/orders - View orders
+/whoami - Show your Telegram User ID
+/help - Contact seller
+```
+
+## Admin commands
+
+```text
+/setphoto CARD-ID - Attach a replied photo to a card
+/postcard CARD-ID - Publish a card to the configured sales channel
+/allocate SET-ID - Close and allocate a priority set
+```
+
+## Security
+
+- Never commit a real `.env` file.
+- Never hard-code the bot token or API secret.
+- Only IDs in `ADMIN_TELEGRAM_IDS` can run photo, posting and allocation commands.
+- The Apps Script lock protects both cart holds and priority allocation from concurrent
+  updates.
